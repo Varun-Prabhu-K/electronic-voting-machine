@@ -1,0 +1,358 @@
+## 8051 ASSEMBLY CODE FOR EVM
+
+ORG 0000H
+LJMP START
+
+SP_ADDR          EQU 70H
+STEPS_PER_VOTE   EQU 08H
+IDBUF_BASE       EQU 40H
+VOTED_FLAGS_BASE EQU 60H
+VOTER_TABLE_ADDR EQU 0C00H
+NO_KEY           EQU 0FFH
+
+VOTE_A      DATA 30H
+VOTE_B      DATA 31H
+VOTEDCNT    DATA 32H
+IDPOS       DATA 33H
+TMP         DATA 34H
+FLAG        DATA 35H
+SAV_R6      DATA 36H
+SAV_R7      DATA 37H
+
+ORG VOTER_TABLE_ADDR
+VOTER_TABLE:
+    DB 'A','1','B','2','C','3'
+    DB 'D','4','A','5','B','6'
+    DB 'C','1','D','2','A','3'
+    DB 'B','4','C','5','D','6'
+    DB 'A','0','B','1','C','2'
+    DB 'D','3','A','4','B','5'
+    DB 'C','6','D','7','A','8'
+    DB 'B','9','C','0','D','1'
+    DB 'A','2','B','3','C','4'
+    DB 'D','5','A','6','B','7'
+    DB 'C','8','D','9','A','0'
+    DB 'B','1','C','2','D','3'
+    DB 'A','4','B','5','C','6'
+    DB 'D','7','A','8','B','9'
+    DB 'A','A','A','A','A','A'
+
+ORG 0100H
+START:
+    MOV SP,#SP_ADDR
+    MOV P1,#0FFH
+    MOV P2,#00H
+    MOV P3,#0FFH
+    CLR P3.0
+    CLR P3.1 
+
+    MOV VOTE_A,#00H
+    MOV VOTE_B,#00H
+    MOV VOTEDCNT,#00H
+
+    ; clear voted flags (15 entries)
+    MOV R0,#VOTED_FLAGS_BASE
+    MOV R1,#15
+CLR_FLAGS:
+    MOV @R0,#00H
+    INC R0
+    DJNZ R1,CLR_FLAGS
+
+MAIN_LOOP:
+    ACALL GET_ID
+    ACALL CMP_WITH_ADMIN
+    JNZ NOT_ADMIN_LABEL
+    ACALL SHOW_RESULT
+    SJMP START
+
+
+NOT_ADMIN_LABEL:
+    ACALL VERIFY_ID_TABLE
+    MOV A,FLAG
+    CJNE A,#01H,BAD_ID_PATH
+    CLR P3.1 ; red off
+    SETB P3.0 ; green on
+
+WAIT_VOTE_PRESS:
+    JB  P3.2,CHECK_VOTE_B0
+    ACALL SHORT_DELAY
+    JNB P3.2,DO_VOTE_A
+
+CHECK_VOTE_B0:
+    JB  P3.3,WAIT_VOTE_PRESS
+    ACALL SHORT_DELAY
+    JNB P3.3,DO_VOTE_B
+    SJMP WAIT_VOTE_PRESS
+
+DO_VOTE_A:
+    ACALL WAIT_BUTTON_RELEASE_A
+    INC VOTE_A
+    ACALL MARK_ID_USED
+    INC VOTEDCNT
+    CLR P3.0
+    SJMP MAIN_LOOP
+
+DO_VOTE_B:
+    ACALL WAIT_BUTTON_RELEASE_B
+    INC VOTE_B
+    ACALL MARK_ID_USED
+    INC VOTEDCNT
+    CLR P3.0
+    SJMP MAIN_LOOP
+
+BAD_ID_PATH:
+    CJNE A,#02H,NOT_FOUND
+    SETB P3.1
+    ACALL SHORT_DELAY
+    CLR  P3.1
+    ACALL SHORT_DELAY
+    SETB P3.1
+    ACALL SHORT_DELAY
+    CLR  P3.1
+    SJMP MAIN_LOOP
+
+NOT_FOUND:
+    SETB P3.1
+    ACALL SHORT_DELAY
+    CLR  P3.1
+    SJMP MAIN_LOOP
+
+GET_ID: ; Read 6 ASCII keys into ID buffer
+    MOV R7,#06
+    MOV R6,#00
+
+GET_ID_LOOP:
+    ACALL KP_GET_CHAR
+    MOV R4,A
+    MOV A,#IDBUF_BASE
+    ADD A,R6
+    MOV R0,A
+    MOV A,R4
+    MOV @R0,A
+    INC R6
+    DJNZ R7,GET_ID_LOOP
+    RET
+
+KP_GET_CHAR:
+    MOV P0,#0FFH
+K1:
+    MOV P1,#00H
+    MOV A,P0
+    ANL A,#0FH
+    CJNE A,#0FH,K1
+K2:
+    ACALL DELAY
+    MOV A,P0
+    ANL A,#0FH
+    CJNE A,#0FH,OVER
+    SJMP K2
+OVER:
+    ACALL DELAY
+    MOV A,P0
+    ANL A,#0FH
+    CJNE A,#0FH,OVER1
+    SJMP K2
+
+OVER1:
+    MOV P1,#0FEH
+    MOV A,P0
+    ANL A,#0FH
+    CJNE A,#0FH,ROW0
+    MOV P1,#0FDH
+    MOV A,P0
+    ANL A,#0FH
+    CJNE A,#0FH,ROW1
+    MOV P1,#0FBH
+    MOV A,P0
+    ANL A,#0FH
+    CJNE A,#0FH,ROW2
+    MOV P1,#0F7H
+    MOV A,P0
+    ANL A,#0FH
+    CJNE A,#0FH,ROW3
+    LJMP K2
+
+ROW0:
+    MOV DPTR,#KCODE0
+    SJMP FIND
+
+ROW1:
+    MOV DPTR,#KCODE1
+    SJMP FIND
+
+ROW2:
+    MOV DPTR,#KCODE2
+    SJMP FIND
+ROW3:
+    MOV DPTR,#KCODE3
+    SJMP FIND
+FIND:
+    RRC A
+    JNC MATCH
+    INC DPTR
+    SJMP FIND
+MATCH:
+    CLR A
+    MOVC A,@A+DPTR
+    RET
+
+KCODE0:
+    DB '1','2','3','A'
+KCODE1:
+    DB '4','5','6','B'
+KCODE2:
+    DB '7','8','9','C'
+KCODE3:
+    DB '*','0','#','D'
+
+DELAY:
+    ACALL SHORT_DELAY
+    RET
+
+ORG 0E00H
+ADMIN_ID:
+    DB 'A','B','D','1','4',’9’
+
+ORG 0200H
+CMP_WITH_ADMIN:
+    MOV R4,#00
+    MOV DPTR,#ADMIN_ID
+CMP_ADMIN_LOOP:
+    MOV A,R4
+    MOVC A,@A+DPTR
+    MOV B,A
+    MOV A,R4
+    ADD A,#IDBUF_BASE
+    MOV R0,A
+    MOV A,@R0
+    CJNE A,B,NOT_ADMIN
+    INC R4
+    CJNE R4,#06,CMP_ADMIN_LOOP
+    CLR A                 ; Z flag emulation via A==0 for “equal”
+    RET
+NOT_ADMIN:
+    MOV A,#01
+    RET
+
+VERIFY_ID_TABLE:
+    MOV R2,#15
+    MOV DPTR,#VOTER_TABLE
+    MOV R3,#00
+VERIFY_LOOP:
+    MOV R4,#00
+COMPARE_ENTRY:
+    MOV A,R4
+    MOVC A,@A+DPTR ; table char
+    MOV B,A
+    MOV A,R4
+    ADD A,#IDBUF_BASE
+    MOV R0,A
+    MOV A,@R0 ; typed char
+    CJNE A,B,NEXT_ENTRY
+    INC R4
+    CJNE R4,#06,COMPARE_ENTRY
+
+    MOV A,R3
+    ADD A,#VOTED_FLAGS_BASE
+    MOV R0,A
+    MOV A,@R0
+    JZ ENTRY_NOT_USED
+    MOV FLAG,#02 ; duplicate
+    RET
+
+ENTRY_NOT_USED:
+    MOV FLAG,#01 ; ok
+    MOV TMP,R3
+    RET
+
+NEXT_ENTRY:
+    MOV R5,#06
+INC_LOOP:
+    INC DPTR
+    DJNZ R5,INC_LOOP
+    INC R3
+    DJNZ R2,VERIFY_LOOP
+    MOV FLAG,#03 ; not found
+    RET
+
+MARK_ID_USED:
+    MOV A,TMP
+    ADD A,#VOTED_FLAGS_BASE
+    MOV R0,A
+    MOV @R0,#01
+    RET
+
+WAIT_BUTTON_RELEASE_A:
+WRA0: JB  P3.2,WRA1
+      SJMP WRA0
+WRA1: ACALL SHORT_DELAY
+      RET
+WAIT_BUTTON_RELEASE_B:
+WRB0: JB  P3.3,WRB1
+      SJMP WRB0
+WRB1: ACALL SHORT_DELAY
+      RET
+SHOW_RESULT:
+    MOV A,VOTE_A
+    CJNE A,#00,SR_DO
+    RET
+SR_DO:
+    MOV R3,A
+SR_OUTER:
+    MOV R4,#STEPS_PER_VOTE
+SR_STEPSEQ:
+    MOV P2,#09H           ; 1001
+    ACALL STEP_DELAY
+    MOV P2,#0CH           ; 1100
+    ACALL STEP_DELAY
+    MOV P2,#06H           ; 0110
+    ACALL STEP_DELAY
+    MOV P2,#03H           ; 0011
+    ACALL STEP_DELAY
+    DJNZ R4,SR_STEPSEQ
+    DJNZ R3,SR_OUTER
+    MOV P2,#00H
+    RET
+
+SHORT_DELAY:
+    MOV R6,#138
+SD1:DJNZ R6,SD1
+    RET
+
+STEP_DELAY:
+    MOV R7,#230
+SD2:DJNZ R7,SD2
+    RET
+END
+SHOW_RESULT:
+    MOV A,VOTE_A
+    CJNE A,#00,SR_DO
+    RET
+SR_DO:
+    MOV R3,A
+SR_OUTER:
+    MOV R4,#STEPS_PER_VOTE
+SR_STEPSEQ:
+    MOV P2,#09H           ; 1001
+    ACALL STEP_DELAY
+    MOV P2,#0CH           ; 1100
+    ACALL STEP_DELAY
+    MOV P2,#06H           ; 0110
+    ACALL STEP_DELAY
+    MOV P2,#03H           ; 0011
+    ACALL STEP_DELAY
+    DJNZ R4,SR_STEPSEQ
+    DJNZ R3,SR_OUTER
+    MOV P2,#00H
+    RET
+
+SHORT_DELAY:
+    MOV R6,#138
+SD1:DJNZ R6,SD1
+    RET
+
+STEP_DELAY:
+    MOV R7,#230
+SD2:DJNZ R7,SD2
+    RET
+END
